@@ -839,8 +839,9 @@ static bool bnx2x_is_wreg_in_chip(struct bnx2x *bp,
 /**
  * bnx2x_read_pages_regs - read "paged" registers
  *
- * @bp		device handle
- * @p		output buffer
+ * @bp:		device handle
+ * @p:		output buffer
+ * @preset:	the preset value
  *
  * Reads "paged" memories: memories that may only be read by first writing to a
  * specific address ("write address") and then reading from a specific address
@@ -1107,13 +1108,34 @@ static void bnx2x_get_drvinfo(struct net_device *dev,
 			      struct ethtool_drvinfo *info)
 {
 	struct bnx2x *bp = netdev_priv(dev);
+	char version[ETHTOOL_FWVERS_LEN];
+	int ext_dev_info_offset;
+	u32 mbi;
 
-	strlcpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_MODULE_VERSION, sizeof(info->version));
+	strscpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
 
-	bnx2x_fill_fw_str(bp, info->fw_version, sizeof(info->fw_version));
+	if (SHMEM2_HAS(bp, extended_dev_info_shared_addr)) {
+		ext_dev_info_offset = SHMEM2_RD(bp,
+						extended_dev_info_shared_addr);
+		mbi = REG_RD(bp, ext_dev_info_offset +
+			     offsetof(struct extended_dev_info_shared_cfg,
+				      mbi_version));
+		if (mbi) {
+			memset(version, 0, sizeof(version));
+			snprintf(version, ETHTOOL_FWVERS_LEN, "mbi %d.%d.%d ",
+				 (mbi & 0xff000000) >> 24,
+				 (mbi & 0x00ff0000) >> 16,
+				 (mbi & 0x0000ff00) >> 8);
+			strscpy(info->fw_version, version,
+				sizeof(info->fw_version));
+		}
+	}
 
-	strlcpy(info->bus_info, pci_name(bp->pdev), sizeof(info->bus_info));
+	memset(version, 0, sizeof(version));
+	bnx2x_fill_fw_str(bp, version, ETHTOOL_FWVERS_LEN);
+	strlcat(info->fw_version, version, sizeof(info->fw_version));
+
+	strscpy(info->bus_info, pci_name(bp->pdev), sizeof(info->bus_info));
 }
 
 static void bnx2x_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
@@ -1856,7 +1878,9 @@ static int bnx2x_set_eeprom(struct net_device *dev,
 }
 
 static int bnx2x_get_coalesce(struct net_device *dev,
-			      struct ethtool_coalesce *coal)
+			      struct ethtool_coalesce *coal,
+			      struct kernel_ethtool_coalesce *kernel_coal,
+			      struct netlink_ext_ack *extack)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
@@ -1869,7 +1893,9 @@ static int bnx2x_get_coalesce(struct net_device *dev,
 }
 
 static int bnx2x_set_coalesce(struct net_device *dev,
-			      struct ethtool_coalesce *coal)
+			      struct ethtool_coalesce *coal,
+			      struct kernel_ethtool_coalesce *kernel_coal,
+			      struct netlink_ext_ack *extack)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
@@ -1888,7 +1914,9 @@ static int bnx2x_set_coalesce(struct net_device *dev,
 }
 
 static void bnx2x_get_ringparam(struct net_device *dev,
-				struct ethtool_ringparam *ering)
+				struct ethtool_ringparam *ering,
+				struct kernel_ethtool_ringparam *kernel_ering,
+				struct netlink_ext_ack *extack)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
@@ -1912,7 +1940,9 @@ static void bnx2x_get_ringparam(struct net_device *dev,
 }
 
 static int bnx2x_set_ringparam(struct net_device *dev,
-			       struct ethtool_ringparam *ering)
+			       struct ethtool_ringparam *ering,
+			       struct kernel_ethtool_ringparam *kernel_ering,
+			       struct netlink_ext_ack *extack)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
@@ -2598,7 +2628,6 @@ static int bnx2x_run_loopback(struct bnx2x *bp, int loopback_mode)
 	wmb();
 	DOORBELL_RELAXED(bp, txdata->cid, txdata->tx_db.raw);
 
-	mmiowb();
 	barrier();
 
 	num_pkts++;
@@ -3541,6 +3570,7 @@ static void bnx2x_get_channels(struct net_device *dev,
  * bnx2x_change_num_queues - change the number of RSS queues.
  *
  * @bp:			bnx2x private structure
+ * @num_rss:		rss count
  *
  * Re-configure interrupt mode to get the new number of MSI-X
  * vectors and re-add NAPI objects.
@@ -3636,6 +3666,7 @@ static int bnx2x_get_ts_info(struct net_device *dev,
 }
 
 static const struct ethtool_ops bnx2x_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_USECS,
 	.get_drvinfo		= bnx2x_get_drvinfo,
 	.get_regs_len		= bnx2x_get_regs_len,
 	.get_regs		= bnx2x_get_regs,
